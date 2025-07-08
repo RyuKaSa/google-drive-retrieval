@@ -3,6 +3,8 @@
 import os
 import json
 import io
+import traceback
+import subprocess
 
 from django.shortcuts import render, redirect
 from django.urls import reverse
@@ -122,69 +124,85 @@ def metadata(request):
         return JsonResponse({'error': 'bad json'}, status=400)
     return JsonResponse(docs, safe=False)
 
-
 @csrf_exempt
 def fetch_and_download(request):
     if request.method != 'POST':
         return HttpResponseNotAllowed(['POST'])
 
+    # parse request
     try:
         payload = json.loads(request.body.decode('utf-8'))
         docs    = payload.get('docs', [])
     except (ValueError, AttributeError):
         return HttpResponseBadRequest('Invalid JSON payload'.encode('utf-8'))
 
+    # build Drive service
     service = get_drive_service(request)
     if not service:
         return HttpResponseBadRequest('Missing or expired Drive credentials'.encode('utf-8'))
 
+    # prepare download directory
     allowed_mimes = set(settings.DRIVE_ALLOWED_MIME_TYPES)
-    downloaded   = []
+    download_root = os.path.join(settings.BASE_DIR, 'downloads')
+    os.makedirs(download_root, exist_ok=True)
+
+    downloaded = []
 
     def recurse(items):
         for item in items:
-            fid, name, mime = (
-                item.get('id'),
-                item.get('name'),
-                item.get('mimeType'),
-            )
+            fid  = item.get('id')
+            name = item.get('name')
+            mime = item.get('mimeType')
 
-            if mime in allowed_mimes:
-                # download file to project root
-                local_dir = os.path.join(settings.BASE_DIR, 'downloads')
-                request_media = service.files().get_media(fileId=fid)
-                fh            = io.BytesIO()
-                downloader    = MediaIoBaseDownload(fh, request_media)
-
+            # 1) Native Google Docs → export as PDF
+            if mime == 'application/vnd.google-apps.document':
+                request_media = service.files().export(
+                    fileId=fid,
+                    mimeType='application/pdf'
+                )
+                fh = io.BytesIO()
+                downloader = MediaIoBaseDownload(fh, request_media)
                 done = False
                 while not done:
-                    status, done = downloader.next_chunk()
+                    _, done = downloader.next_chunk()
 
-                with open(os.path.join(local_dir, name), 'wb') as out:
-                    
+                pdf_name = f"{name}.pdf"
+                with open(os.path.join(download_root, pdf_name), 'wb') as out:
                     out.write(fh.getvalue())
+                downloaded.append(pdf_name)
 
-                downloaded.append(name)
-
+            # 2) Folder → recurse (include shared drives)
             elif mime == 'application/vnd.google-apps.folder':
-                # list children and recurse
                 page_token = None
-                children   = []
                 while True:
                     resp = service.files().list(
                         q=f"'{fid}' in parents and trashed=false",
-                        fields="nextPageToken, files(id,name,mimeType)",
-                        pageToken=page_token
+                        fields='nextPageToken, files(id,name,mimeType)',
+                        pageToken=page_token,
+                        includeItemsFromAllDrives=True,
+                        supportsAllDrives=True,
+                        corpora='allDrives'
                     ).execute()
-                    children.extend(resp.get('files', []))
+
+                    recurse(resp.get('files', []))
                     page_token = resp.get('nextPageToken')
                     if not page_token:
                         break
 
-                recurse(children)
-            # otherwise skip
+            # 3) All other allowed types (including DOCX) → binary download
+            elif mime in allowed_mimes:
+                request_media = service.files().get_media(fileId=fid)
+                fh = io.BytesIO()
+                downloader = MediaIoBaseDownload(fh, request_media)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+
+                with open(os.path.join(download_root, name), 'wb') as out:
+                    out.write(fh.getvalue())
+                downloaded.append(name)
+
+            # unsupported MIME → skip
 
     recurse(docs)
-
     return JsonResponse({'downloaded': downloaded}, status=200 if downloaded else 500)
-
