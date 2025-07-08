@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="https://apis.google.com/js/api.js"></script>
+  <script src="https://accounts.google.com/gsi/client"></script>
+</head>
+<body>
+  {% if not creds %}
+    <a href="{% url 'driveapp:login' %}">
+      <button>Connect Google Drive</button>
+    </a>
+  {% else %}
+    <p>✅ Drive connected.</p>
+    <button id="picker">Pick Files/Folders</button>
+    <pre id="picker-result"></pre>
+  {% endif %}
+
+  <script>
+    const ALLOWED_MIME_TYPES = JSON.parse('{{ allowed_mimes|escapejs }}');
+    const oauthToken  = "{{ creds.token|default:'' }}";
+    const apiKey      = "{{ api_key }}";
+    const csrftoken   = "{{ csrf_token }}";
+    
+    if (oauthToken) {
+      document.getElementById('picker')
+        ?.addEventListener('click', () => gapi.load('picker', { callback: buildPicker }));
+    
+      function buildPicker() {
+        const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+          .setIncludeFolders(true)
+          .setSelectFolderEnabled(true)
+          .setMimeTypes([...ALLOWED_MIME_TYPES, 'application/vnd.google-apps.folder'].join(','));
+    
+        new google.picker.PickerBuilder()
+          .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+          .setDeveloperKey(apiKey)
+          .addView(view)
+          .setOAuthToken(oauthToken)
+          .setCallback(pickerCallback)
+          .build()
+          .setVisible(true);
+      }
+    
+      async function pickerCallback(data) {
+        if (data.action !== google.picker.Action.PICKED) return;
+    
+        const docs = data.docs;
+        writeStatus('🔖 Items selected, sending to server…');
+    
+        await fetch("{% url 'driveapp:metadata' %}", {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+          body: JSON.stringify({ docs })
+        }).catch(console.error);
+    
+        const res = await fetch("{% url 'driveapp:fetch' %}", {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+          body: JSON.stringify({ docs })
+        });
+    
+        if (!res.ok) {
+          const txt = await res.text();
+          writeStatus(`❌ Download failed: ${txt}`);
+          return;
+        }
+    
+        const { downloaded } = await res.json();
+        writeStatus(`✅ Downloaded ${downloaded.length} file(s):\n` +
+                    JSON.stringify(downloaded, null, 2));
+      }
+    
+      function writeStatus(msg) {
+        document.getElementById('picker-result').textContent = msg;
+      }
+    }
+    </script>
+    
+</body>
+</html>
