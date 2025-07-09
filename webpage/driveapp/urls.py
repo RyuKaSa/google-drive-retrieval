@@ -1,6 +1,5 @@
 from django.urls import path
 from . import views
-from .views import fetch_and_download
 
 
 app_name = "driveapp"
@@ -10,5 +9,6 @@ urlpatterns = [
     path('login/', views.login, name='login'),
     path('oauth2callback/', views.oauth2callback, name='oauth2callback'),
     path('metadata/', views.metadata, name='metadata'),  # raw JSON catcher
-    path('fetch/', fetch_and_download, name='fetch'),
+    path('fetch/', views.fetch_and_download, name='fetch'),
+    path('search/', views.search_drive, name='search'),
 ]

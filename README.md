@@ -31,9 +31,4 @@
 * For files: verifies access and downloads each file temporarily
 * Downloads are stored in a `downloads/` subdirectory and may be discarded after embedding
 
-
-
-
-
-
-
+## Search: Subcomponents

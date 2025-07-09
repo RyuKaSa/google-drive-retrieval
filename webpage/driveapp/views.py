@@ -154,7 +154,7 @@ def fetch_and_download(request):
             name = item.get('name')
             mime = item.get('mimeType')
 
-            # 1) Native Google Docs → export as PDF
+            # 1) Native Google Docs -> export as PDF
             if mime == 'application/vnd.google-apps.document':
                 request_media = service.files().export(
                     fileId=fid,
@@ -171,7 +171,7 @@ def fetch_and_download(request):
                     out.write(fh.getvalue())
                 downloaded.append(pdf_name)
 
-            # 2) Folder → recurse (include shared drives)
+            # 2) Folder -> recurse (include shared drives)
             elif mime == 'application/vnd.google-apps.folder':
                 page_token = None
                 while True:
@@ -189,7 +189,7 @@ def fetch_and_download(request):
                     if not page_token:
                         break
 
-            # 3) All other allowed types (including DOCX) → binary download
+            # 3) All other allowed types (including DOCX) -> binary download
             elif mime in allowed_mimes:
                 request_media = service.files().get_media(fileId=fid)
                 fh = io.BytesIO()
@@ -202,7 +202,42 @@ def fetch_and_download(request):
                     out.write(fh.getvalue())
                 downloaded.append(name)
 
-            # unsupported MIME → skip
+            # unsupported MIME -> skip
 
     recurse(docs)
     return JsonResponse({'downloaded': downloaded}, status=200 if downloaded else 500)
+
+@csrf_exempt
+def search_drive(request):
+    if request.method != 'POST':
+        return HttpResponseNotAllowed(['POST'])
+
+    try:
+        payload = json.loads(request.body.decode('utf-8'))
+        query = payload.get('query', '')
+        corpora = payload.get('corpora', 'user')
+    except (ValueError, AttributeError):
+        return HttpResponseBadRequest('Invalid JSON payload'.encode('utf-8'))
+
+    service = get_drive_service(request)
+    if not service:
+        return HttpResponseBadRequest('Missing or expired Drive credentials'.encode('utf-8'))
+
+    try:
+        # SEARCH HAPENS HERE
+        response = service.files().list(
+            q=query,
+            fields="files(id, name, mimeType)",
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True,
+            corpora=corpora,
+            pageSize=20
+        ).execute()
+
+        return JsonResponse({
+            'corpora': corpora,
+            'results': response.get('files', [])
+        })
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+

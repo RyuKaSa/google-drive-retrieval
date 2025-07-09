@@ -13,6 +13,12 @@
   {% else %}
     <p>✅ Drive connected.</p>
     <button id="picker">Pick Files/Folders</button>
+    <div id="action-choices" style="display:none; margin-top:1em;">
+      <button id="download-btn">Download</button>
+      <input id="search-query" type="text" placeholder="Search files by name..." style="margin-top:1em; width:300px;" />
+      <button id="run-search">🔍 Search</button>
+    </div>
+
     <pre id="picker-result"></pre>
   {% endif %}
 
@@ -25,13 +31,15 @@
     if (oauthToken) {
       document.getElementById('picker')
         ?.addEventListener('click', () => gapi.load('picker', { callback: buildPicker }));
-    
+
+      let pickedDocs = null;
+
       function buildPicker() {
         const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
           .setIncludeFolders(true)
           .setSelectFolderEnabled(true)
           .setMimeTypes([...ALLOWED_MIME_TYPES, 'application/vnd.google-apps.folder'].join(','));
-    
+
         new google.picker.PickerBuilder()
           .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
           .setDeveloperKey(apiKey)
@@ -41,36 +49,108 @@
           .build()
           .setVisible(true);
       }
-    
+
+      function showActionChoices(show) {
+        document.getElementById('action-choices').style.display = show ? '' : 'none';
+      }
+
       async function pickerCallback(data) {
         if (data.action !== google.picker.Action.PICKED) return;
-    
-        const docs = data.docs;
-        writeStatus('🔖 Items selected, sending to server…');
-    
+        pickedDocs = data.docs;
+        showActionChoices(true);
+        writeStatus('🔖 Items selected. Choose an action.');
+      }
+
+      document.getElementById('download-btn').addEventListener('click', async function() {
+        if (!pickedDocs) return;
+        showActionChoices(false);
+        writeStatus('🔖 Downloading...');
         await fetch("{% url 'driveapp:metadata' %}", {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
-          body: JSON.stringify({ docs })
+          body: JSON.stringify({ docs: pickedDocs })
         }).catch(console.error);
-    
+
         const res = await fetch("{% url 'driveapp:fetch' %}", {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
-          body: JSON.stringify({ docs })
+          body: JSON.stringify({ docs: pickedDocs })
         });
-    
+
         if (!res.ok) {
           const txt = await res.text();
           writeStatus(`❌ Download failed: ${txt}`);
           return;
         }
-    
+
         const { downloaded } = await res.json();
         writeStatus(`✅ Downloaded ${downloaded.length} file(s):\n` +
                     JSON.stringify(downloaded, null, 2));
+        pickedDocs = null;
+      });
+
+      document.getElementById('run-search')?.addEventListener('click', async () => {
+        // 1) Validation
+        if (!pickedDocs || pickedDocs.length === 0) {
+          writeStatus('❌ No files or folders selected.');
+          return;
+        }
+        const input = document.getElementById('search-query').value.trim();
+        if (!input) {
+          writeStatus('❌ Empty search query.');
+          return;
+        }
+
+        // 2) Prepare search terms
+        const words = input.split(/\s+/).map(w => w.toLowerCase());
+        // Format for orderless word search: name contains 'foo' and name contains 'bar'
+        const terms = words.map(w => `name contains '${w.replace(/'/g, "\\'")}'`);
+        const searchQuery = terms.join(' and ');
+
+        writeStatus(`🔍 Running search for: ${searchQuery}`);
+
+        // 3) Filter selected docs *client-side*
+        const selectedMatches = pickedDocs.filter(doc =>
+          words.every(w => doc.name.toLowerCase().includes(w))
+        );
+
+        // 4) Search entire Drive (allDrives)
+        let driveResults = [];
+        try {
+          const res = await fetch("{% url 'driveapp:search' %}", {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRFToken': csrftoken
+            },
+            body: JSON.stringify({ query: searchQuery, corpora: 'allDrives' })
+          });
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          driveResults = data.results || [];
+        } catch (err) {
+          writeStatus(`❌ Drive search failed: ${err.message}`);
+          return;
+        }
+
+        // 5) Render exactly two result groups
+        const selBlock = `🗂 Selected (${selectedMatches.length}):\n` +
+          (selectedMatches.length
+            ? selectedMatches.map(d => ` - ${d.name} (${d.id})`).join('\n')
+            : '  (no matches in selection)');
+        const allBlock = `🌐 All Drives (${driveResults.length}):\n` +
+          (driveResults.length
+            ? driveResults.map(d => ` - ${d.name} (${d.id})`).join('\n')
+            : '  (no matches in Drive)');
+
+        writeStatus(`🔍 Results for: "${input}"\n\n${selBlock}\n\n${allBlock}`);
+      });
+
+      function writeStatus(msg) {
+        document.getElementById('picker-result').textContent = msg;
       }
-    
+
+      
       function writeStatus(msg) {
         document.getElementById('picker-result').textContent = msg;
       }
