@@ -2,160 +2,177 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <title>Drive Picker</title>
+
+  <!-- Google APIs -->
   <script src="https://apis.google.com/js/api.js"></script>
   <script src="https://accounts.google.com/gsi/client"></script>
+
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; }
+    #action-choices { margin-top: 1em; }
+    pre { background: #f6f6f6; padding: 1em; white-space: pre-wrap; }
+  </style>
 </head>
+
 <body>
-  {% if not creds %}
-    <a href="{% url 'driveapp:login' %}">
-      <button>Connect Google Drive</button>
-    </a>
-  {% else %}
-    <p>✅ Drive connected.</p>
-    <button id="picker">Pick Files/Folders</button>
-    <div id="action-choices" style="display:none; margin-top:1em;">
-      <button id="download-btn">Download</button>
-      <input id="search-query" type="text" placeholder="Search files by name..." style="margin-top:1em; width:300px;" />
-      <button id="run-search">🔍 Search</button>
-    </div>
+{% if not creds %}
+  <a href="{% url 'driveapp:login' %}">
+    <button>Connect Google Drive</button>
+  </a>
+{% else %}
+  <p>✅ Drive connected.</p>
 
-    <pre id="picker-result"></pre>
-  {% endif %}
+  <button id="picker">Pick Files/Folders</button>
 
-  <script>
-    const ALLOWED_MIME_TYPES = JSON.parse('{{ allowed_mimes|escapejs }}');
-    const oauthToken  = "{{ creds.token|default:'' }}";
-    const apiKey      = "{{ api_key }}";
-    const csrftoken   = "{{ csrf_token }}";
-    
-    if (oauthToken) {
-      document.getElementById('picker')
-        ?.addEventListener('click', () => gapi.load('picker', { callback: buildPicker }));
+  <div id="action-choices" style="display:none;">
+    <button id="download-btn">Download</button><br>
 
-      let pickedDocs = null;
+    <input id="search-query"
+           type="text"
+           placeholder="Search files by name or content…"
+           style="margin-top:1em; width:300px;" />
+    <button id="run-search">🔍 Search</button>
+  </div>
 
-      function buildPicker() {
-        const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
-          .setIncludeFolders(true)
-          .setSelectFolderEnabled(true)
-          .setMimeTypes([...ALLOWED_MIME_TYPES, 'application/vnd.google-apps.folder'].join(','));
+  <pre id="picker-result"></pre>
+{% endif %}
 
-        new google.picker.PickerBuilder()
-          .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
-          .setDeveloperKey(apiKey)
-          .addView(view)
-          .setOAuthToken(oauthToken)
-          .setCallback(pickerCallback)
-          .build()
-          .setVisible(true);
-      }
+<script>
+  const ALLOWED_MIME_TYPES = JSON.parse('{{ allowed_mimes|escapejs }}');
+  const oauthToken         = "{{ creds.token|default:'' }}";
+  const apiKey             = "{{ api_key }}";
+  const csrftoken          = "{{ csrf_token }}";
 
-      function showActionChoices(show) {
-        document.getElementById('action-choices').style.display = show ? '' : 'none';
-      }
+  if (oauthToken) {
+    let pickedDocs = null;
 
-      async function pickerCallback(data) {
-        if (data.action !== google.picker.Action.PICKED) return;
-        pickedDocs = data.docs;
-        showActionChoices(true);
-        writeStatus('🔖 Items selected. Choose an action.');
-      }
+    document.getElementById('picker')
+      .addEventListener('click', () =>
+        gapi.load('picker', { callback: buildPicker })
+      );
 
-      document.getElementById('download-btn').addEventListener('click', async function() {
-        if (!pickedDocs) return;
-        showActionChoices(false);
-        writeStatus('🔖 Downloading...');
-        await fetch("{% url 'driveapp:metadata' %}", {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
-          body: JSON.stringify({ docs: pickedDocs })
-        }).catch(console.error);
+    function buildPicker() {
+      const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+        .setIncludeFolders(true)
+        .setSelectFolderEnabled(true)
+        .setMimeTypes([
+          ...ALLOWED_MIME_TYPES,
+          'application/vnd.google-apps.folder'
+        ].join(','));
 
-        const res = await fetch("{% url 'driveapp:fetch' %}", {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
-          body: JSON.stringify({ docs: pickedDocs })
-        });
+      new google.picker.PickerBuilder()
+        .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+        .setDeveloperKey(apiKey)
+        .addView(view)
+        .setOAuthToken(oauthToken)
+        .setCallback(pickerCallback)
+        .build()
+        .setVisible(true);
+    }
 
-        if (!res.ok) {
-          const txt = await res.text();
-          writeStatus(`❌ Download failed: ${txt}`);
-          return;
-        }
+    function pickerCallback(data) {
+      if (data.action !== google.picker.Action.PICKED) return;
+      pickedDocs = data.docs;
+      document.getElementById('action-choices').style.display = '';
+      writeStatus('🔖 Items selected. Choose an action.');
+    }
 
-        const { downloaded } = await res.json();
-        writeStatus(`✅ Downloaded ${downloaded.length} file(s):\n` +
-                    JSON.stringify(downloaded, null, 2));
-        pickedDocs = null;
+    document.getElementById('download-btn').addEventListener('click', async function() {
+      if (!pickedDocs) return;
+      showActionChoices(false);
+      writeStatus('🔖 Downloading...');
+      await fetch("{% url 'driveapp:metadata' %}", {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+        body: JSON.stringify({ docs: pickedDocs })
+      }).catch(console.error);
+
+      const res = await fetch("{% url 'driveapp:fetch' %}", {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+        body: JSON.stringify({ docs: pickedDocs })
       });
 
-      document.getElementById('run-search')?.addEventListener('click', async () => {
-        // 1) Validation
+      if (!res.ok) {
+        const txt = await res.text();
+        writeStatus(`❌ Download failed: ${txt}`);
+        return;
+      }
+
+      const { downloaded } = await res.json();
+      writeStatus(`✅ Downloaded ${downloaded.length} file(s):\n` +
+                  JSON.stringify(downloaded, null, 2));
+      pickedDocs = null;
+    });
+
+    document.getElementById('run-search')
+      .addEventListener('click', async () => {
         if (!pickedDocs || pickedDocs.length === 0) {
           writeStatus('❌ No files or folders selected.');
           return;
         }
-        const input = document.getElementById('search-query').value.trim();
-        if (!input) {
+        const query = document.getElementById('search-query').value.trim();
+        if (!query) {
           writeStatus('❌ Empty search query.');
           return;
         }
 
-        // 2) Prepare search terms
-        const words = input.split(/\s+/).map(w => w.toLowerCase());
-        // Format for orderless word search: name contains 'foo' and name contains 'bar'
-        const terms = words.map(w => `name contains '${w.replace(/'/g, "\\'")}'`);
-        const searchQuery = terms.join(' and ');
+        writeStatus(`🔍 Searching Drive for: “${query}”…`);
 
-        writeStatus(`🔍 Running search for: ${searchQuery}`);
-
-        // 3) Filter selected docs *client-side*
-        const selectedMatches = pickedDocs.filter(doc =>
-          words.every(w => doc.name.toLowerCase().includes(w))
-        );
-
-        // 4) Search entire Drive (allDrives)
-        let driveResults = [];
+        let data;
         try {
           const res = await fetch("{% url 'driveapp:search' %}", {
-            method: 'POST',
+            method : 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'X-CSRFToken': csrftoken
+              'X-CSRFToken' : csrftoken
             },
-            body: JSON.stringify({ query: searchQuery, corpora: 'allDrives' })
+            body: JSON.stringify({
+              query       : query,
+              selected_ids: pickedDocs.map(d => d.id)
+            })
           });
           if (!res.ok) throw new Error(await res.text());
-          const data = await res.json();
-          driveResults = data.results || [];
+          data = await res.json();
         } catch (err) {
-          writeStatus(`❌ Drive search failed: ${err.message}`);
+          writeStatus(`❌ Search failed: ${err.message}`);
           return;
         }
 
-        // 5) Render exactly two result groups
-        const selBlock = `🗂 Selected (${selectedMatches.length}):\n` +
-          (selectedMatches.length
-            ? selectedMatches.map(d => ` - ${d.name} (${d.id})`).join('\n')
-            : '  (no matches in selection)');
-        const allBlock = `🌐 All Drives (${driveResults.length}):\n` +
-          (driveResults.length
-            ? driveResults.map(d => ` - ${d.name} (${d.id})`).join('\n')
-            : '  (no matches in Drive)');
-
-        writeStatus(`🔍 Results for: "${input}"\n\n${selBlock}\n\n${allBlock}`);
+        renderResults(query, data);
       });
 
-      function writeStatus(msg) {
-        document.getElementById('picker-result').textContent = msg;
-      }
-
-      
-      function writeStatus(msg) {
-        document.getElementById('picker-result').textContent = msg;
-      }
+    function renderBlock(label, list) {
+      return list.length
+        ? `${label} (${list.length}):\n` +
+          list.map(d => `     • ${d.name} (${d.id})`).join('\n')
+        : `${label} (0):\n   (none)`;
     }
-    </script>
-    
+
+    function renderResults(q, data) {
+      const s = data.selected;
+      const g = data.global;
+
+      const selectedBlock =
+        '🗂 Selected:\n' +
+        renderBlock('   — by name',     s.by_name)      + '\n' +
+        renderBlock('   — by full text',s.by_fulltext);
+
+      const globalBlock =
+        '🌐 All drives:\n' +
+        renderBlock('   — by name',     g.by_name)      + '\n' +
+        renderBlock('   — by full text',g.by_fulltext);
+
+      writeStatus(
+        `🔍 Results for “${q}”\n\n${selectedBlock}\n\n${globalBlock}`
+      );
+    }
+
+    function writeStatus(msg) {
+      document.getElementById('picker-result').textContent = msg;
+    }
+  }
+</script>
 </body>
 </html>

@@ -3,8 +3,7 @@
 import os
 import json
 import io
-import traceback
-import subprocess
+import re
 
 from django.shortcuts import render, redirect
 from django.urls import reverse
@@ -71,7 +70,6 @@ def oauth2callback(request):
         flow.fetch_token(authorization_response=request.build_absolute_uri())
         creds = flow.credentials
 
-        # Safely grab token_uri from client_config
         cfg = (flow.client_config.get('web')
                or flow.client_config.get('installed')
                or {})
@@ -213,31 +211,60 @@ def search_drive(request):
         return HttpResponseNotAllowed(['POST'])
 
     try:
-        payload = json.loads(request.body.decode('utf-8'))
-        query = payload.get('query', '')
-        corpora = payload.get('corpora', 'user')
+        payload       = json.loads(request.body.decode('utf-8'))
+        raw_query     = payload.get('query', '').strip()
+        selected_ids  = set(payload.get('selected_ids', []))
     except (ValueError, AttributeError):
         return HttpResponseBadRequest('Invalid JSON payload'.encode('utf-8'))
+
+    words = [re.sub(r"'", r"\\'", w) for w in re.findall(r"\S+", raw_query)]
+    if not words:
+        return JsonResponse({'results': {}})
+
+    # WE DECIDE SEARCH SCOPE HERE
+    # Either names, or text content, or both
+    name_q   = ' and '.join([f"name contains '{w}'"      for w in words])
+    text_q   = ' and '.join([f"fullText contains '{w}'"  for w in words])
 
     service = get_drive_service(request)
     if not service:
         return HttpResponseBadRequest('Missing or expired Drive credentials'.encode('utf-8'))
 
-    try:
-        # SEARCH HAPENS HERE
-        response = service.files().list(
-            q=query,
-            fields="files(id, name, mimeType)",
+    # SEARCH FUNCTION
+    def run(q):
+        resp = service.files().list(
+            q=q,
+            corpora='allDrives',
             includeItemsFromAllDrives=True,
             supportsAllDrives=True,
-            corpora=corpora,
-            pageSize=20
+            fields="files(id,name,mimeType)",
+            pageSize=200
         ).execute()
+        return resp.get('files', [])
+
+    try:
+        name_hits = run(name_q)
+        text_hits = [f for f in run(text_q) if f['id'] not in {d['id'] for d in name_hits}]
+
+        # Split into “selected” and “global”
+        def split(hits):
+            sel  = [h for h in hits if h['id'] in selected_ids]
+            glob = [h for h in hits if h['id'] not in selected_ids]
+            return sel, glob
+
+        sel_name, glob_name = split(name_hits)
+        sel_text, glob_text = split(text_hits)
 
         return JsonResponse({
-            'corpora': corpora,
-            'results': response.get('files', [])
+            'selected': {
+                'by_name'    : sel_name,
+                'by_fulltext': sel_text
+            },
+            'global': {
+                'by_name'    : glob_name,
+                'by_fulltext': glob_text
+            }
         })
+
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
-
