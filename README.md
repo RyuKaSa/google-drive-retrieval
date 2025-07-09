@@ -18,7 +18,7 @@
 * MIME type filtering is configurable in `webpage/webpage/settings.py`
 * The UI cannot do anything more than simply return teh metadata of the selected items. It cannot see the sub-items and fodlers of a selected folder. We rely on the next part for this.
 
-IDEA : have a simple interface where we can show per account, the selected files, and when the user selects new files, they get added to this interface/lsit, and the user can remove these selected files. this idea exists because the current google UI picker is not suited for multiple folders, and files within different folders, it can only select what is visible at the same time on the Picker.
+IDEA : have a simple interface where we can show per account, the selected files, and when the user selects new files, they get added to this interface/list, and the user can remove these selected files. this idea exists because the current google UI picker is not suited for multiple folders, and files within different folders, it can only select what is visible at the same time on the Picker.
 
 ### 2. **Google Drive REST API (Backend)**
 
