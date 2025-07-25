@@ -1,3 +1,5 @@
 .env
+.ropeproject/
 venv/
 downloads/
+diff.py
